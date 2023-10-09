@@ -85,8 +85,8 @@ def dynamic_range_decompression(x, C=1):
     return torch.exp(x) / C
 
 
-def get_voices(extra_voice_dirs=[]):
-    dirs = [BUILTIN_VOICES_DIR] + extra_voice_dirs
+def get_voices(extra_voice_dirs):
+    dirs = extra_voice_dirs     # [BUILTIN_VOICES_DIR] + extra_voice_dirs
     voices = {}
     for d in dirs:
         subs = os.listdir(d)
