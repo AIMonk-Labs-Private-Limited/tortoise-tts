@@ -46,6 +46,7 @@ _comma_number_re = re.compile(r'([0-9][0-9\,]+[0-9])')
 _decimal_number_re = re.compile(r'([0-9]+\.[0-9]+)')
 _pounds_re = re.compile(r'£([0-9\,]*[0-9]+)')
 _dollars_re = re.compile(r'\$([0-9\.\,]*[0-9]+)')
+_units_re = re.compile(r'\b(\d+)\s*(ft|in|cm|m|km)\b')
 _ordinal_re = re.compile(r'[0-9]+(st|nd|rd|th)')
 _number_re = re.compile(r'[0-9]+')
 
@@ -77,7 +78,24 @@ def _expand_dollars(m):
     return '%s %s' % (cents, cent_unit)
   else:
     return 'zero dollars'
-
+  
+def _expand_units(m):
+  number = m.group(1)
+  unit = m.group(2)
+  if unit == "ft":
+    expanded = f"{number} feet"
+  elif unit == "in":
+    expanded = f"{number} inches"
+  elif unit == "cm":
+    expanded = f"{number} centimeters"
+  elif unit == "m":
+    expanded = f"{number} meters"
+  elif unit == "km":
+    expanded = f"{number} kilometers"
+  else:
+    expanded = f"{number} {unit}"
+    
+  return expanded
 
 def _expand_ordinal(m):
   return _inflect.number_to_words(m.group(0))
@@ -102,6 +120,7 @@ def normalize_numbers(text):
   text = re.sub(_comma_number_re, _remove_commas, text)
   text = re.sub(_pounds_re, r'\1 pounds', text)
   text = re.sub(_dollars_re, _expand_dollars, text)
+  text = re.sub(_units_re, _expand_units, text)
   text = re.sub(_decimal_number_re, _expand_decimal_point, text)
   text = re.sub(_ordinal_re, _expand_ordinal, text)
   text = re.sub(_number_re, _expand_number, text)
@@ -141,9 +160,10 @@ def transliteration_cleaners(text):
 
 def english_cleaners(text):
   '''Pipeline for English text, including number and abbreviation expansion.'''
+  text = expand_numbers(text)
   text = convert_to_ascii(text)
   text = lowercase(text)
-  text = expand_numbers(text)
+  # text = expand_numbers(text)
   text = expand_abbreviations(text)
   text = collapse_whitespace(text)
   text = text.replace('"', '')
