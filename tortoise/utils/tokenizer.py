@@ -1,5 +1,6 @@
 import os
 import re
+import json
 
 import inflect
 import torch
@@ -34,21 +35,38 @@ _abbreviations = [(re.compile('\\b%s\\.' % x[0], re.IGNORECASE), x[1]) for x in 
   ('ft', 'fort'),
 ]]
 
+_capitalization_list = [
+  'IOC', 'USD', 'CEO', 'DJ', 'US', 'RBI', 'UTC'
+]
+
 
 def expand_abbreviations(text):
   for regex, replacement in _abbreviations:
     text = re.sub(regex, replacement, text)
   return text
 
+EMOTICON_JSON = os.path.join(os.path.dirname(os.path.realpath(__file__)), '../data/emoticon_dict.json')
+with open(EMOTICON_JSON, 'r') as f:
+  emoticon_dict = json.load(f)
 
 _inflect = inflect.engine()
 _comma_number_re = re.compile(r'([0-9][0-9\,]+[0-9])')
 _decimal_number_re = re.compile(r'([0-9]+\.[0-9]+)')
 _pounds_re = re.compile(r'£([0-9\,]*[0-9]+)')
 _dollars_re = re.compile(r'\$([0-9\.\,]*[0-9]+)')
+_rupees_re = re.compile(r'([0-9\.]*[0-9]+)\s*₹|₹\s*([0-9\.]*[0-9]+)')
 _units_re = re.compile(r'\b(\d+)\s*(ft|in|cm|m|km)\b')
+#_percent_re = re.compile(r'\b(\d+)\s*(%)')
 _ordinal_re = re.compile(r'[0-9]+(st|nd|rd|th)')
 _number_re = re.compile(r'[0-9]+')
+_emoji_pattern = re.compile("["
+        u"\U0001F600-\U0001F64F"  # emoticons
+        u"\U0001F300-\U0001F5FF"  # symbols & pictographs
+        u"\U0001F680-\U0001F6FF"  # transport & map symbols
+        u"\U0001F1E0-\U0001F1FF"  # flags (iOS)
+                           "]+", flags=re.UNICODE)
+#_emoticon_pattern = r'[:;][-]*[)D]|//'
+_emoticon_pattern = re.compile(u'(' + u'|'.join([k for k in emoticon_dict] + ['//']) + u')')
 
 
 def _remove_commas(m):
@@ -78,6 +96,33 @@ def _expand_dollars(m):
     return '%s %s' % (cents, cent_unit)
   else:
     return 'zero dollars'
+  
+def _expand_rupees(m):
+  # 1 if rs at start otherwise 2
+  match = m.group(1) or m.group(2)
+  #match = m.group(1)
+  parts = match.split('.')
+  if len(parts) > 2:
+    return match + ' rupees' # unexpected format
+  rupees = int(parts[0]) if parts[0] else 0
+  paise = int(parts[1]) if len(parts) > 1 and parts[1] else 0
+  if rupees and paise:
+    rupee_unit = 'rupee' if rupees == 1 else 'rupees'
+    paise_unit = 'paisa' if paise == 1 else 'paise'
+    return "%s %s, %s %s" % (rupees, rupee_unit, paise, paise_unit)
+  elif rupees:
+    rupee_unit = 'rupee' if rupees == 1 else 'rupees'
+    return '%s %s' % (rupee_unit, rupees)
+  elif paise:
+    paise_unit = 'paisa' if paise == 1 else 'paise'
+    return '%s %s' % (paise, paise_unit)
+  else:
+    return 'zero rupees' 
+  
+def remove_emoji(text):
+  text = re.sub(_emoji_pattern, r'', text)
+  text = re.sub(_emoticon_pattern, '', text)
+  return text
   
 def _expand_units(m):
   number = m.group(1)
@@ -120,7 +165,10 @@ def normalize_numbers(text):
   text = re.sub(_comma_number_re, _remove_commas, text)
   text = re.sub(_pounds_re, r'\1 pounds', text)
   text = re.sub(_dollars_re, _expand_dollars, text)
+  text = re.sub(_rupees_re, _expand_rupees, text)
   text = re.sub(_units_re, _expand_units, text)
+  #text = re.sub(_percent_re, r'\1 percents', text)
+  text = text.replace("%", " percent ")
   text = re.sub(_decimal_number_re, _expand_decimal_point, text)
   text = re.sub(_ordinal_re, _expand_ordinal, text)
   text = re.sub(_number_re, _expand_number, text)
@@ -142,6 +190,21 @@ def collapse_whitespace(text):
 def convert_to_ascii(text):
   return unidecode(text)
 
+# def separate_capital_letters(text):
+#   text = re.sub(r'\b[A-Z]+\b', lambda match: ' '.join(match.group(0)), text)
+#   return text
+
+def separate_capital_letters(text):
+  words = text.split(" ")
+  spaced_words = []
+  
+  for word in words:
+    if word in _capitalization_list:
+      spaced_words.append(' '.join(list(word)))
+    else:
+      spaced_words.append(word)
+      
+  return ' '.join(spaced_words)
 
 def basic_cleaners(text):
   '''Basic pipeline that lowercases and collapses whitespace without transliteration.'''
@@ -161,7 +224,9 @@ def transliteration_cleaners(text):
 def english_cleaners(text):
   '''Pipeline for English text, including number and abbreviation expansion.'''
   text = expand_numbers(text)
+  text = remove_emoji(text)
   text = convert_to_ascii(text)
+  text = separate_capital_letters(text)
   text = lowercase(text)
   # text = expand_numbers(text)
   text = expand_abbreviations(text)
@@ -200,7 +265,9 @@ class VoiceBpeTokenizer:
             self.preprocess_text = english_cleaners
 
     def encode(self, txt):
+        # print("Before processing: ", txt.encode("utf-8"))
         txt = self.preprocess_text(txt)
+        # print("After processing: ", txt)
         txt = txt.replace(' ', '[SPACE]')
         return self.tokenizer.encode(txt).ids
 
