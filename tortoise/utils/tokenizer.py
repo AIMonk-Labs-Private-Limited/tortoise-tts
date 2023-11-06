@@ -35,6 +35,69 @@ _abbreviations = [(re.compile('\\b%s\\.' % x[0], re.IGNORECASE), x[1]) for x in 
   ('ft', 'fort'),
 ]]
 
+_currency_mapping = {
+  '€': 'euro',
+  '¥': 'yen',
+  'L': 'albanian lek',
+  'CHF': 'swiss franc',
+  'AU$': 'australian dollar',
+  'CA$': 'canadian dollar',
+  'CN¥': 'chinese yuan',
+  '₽': 'ruble',
+  '₩': 'won',
+  'R$': 'brazilian real',
+  'Mex$': 'mexican pesos',
+  '﷼': 'saudi riyal',
+  'د.إ': 'dirham',
+  '₪': 'shekel',
+  '₺': 'lira',
+  'kr': 'krona',
+  'NZ$': 'new zealand dollar',
+  'S$': 'singapore dollar',
+  'HK$': 'hong kong dollar',
+  'RM': 'malaysian ringgit',
+  '₦': 'nigerian naira',
+  'CL$': 'chilean peso',
+  'COL$': 'columbian peso',
+  'Bs': 'venezuelan bolivar',
+  'лв': 'bulgerian lev',
+  '₴': 'ukrainian hryvna'
+}
+
+_math_symbols = {
+  'α': 'alpha',
+  'β': 'beta',
+  'γ': 'gamma',
+  'Ρ': 'rho',
+  'ρ': 'rho',
+  'Υ': 'upsilon',
+  'υ': 'upsilon',
+  'θ': 'theta',
+  '½': 'one half',
+  '+': 'plus',
+  '-': 'minus',
+  '×': 'multiplication',
+  '*': 'asterisk',
+  '÷': 'division',
+  '=': 'equal',
+  '%': 'percent',
+  '<': 'less than',
+  '>': 'greater than',
+  '≤': 'less than or equal to',
+  '≥': 'greater than or equal to',
+  '≠': 'not equal',
+  '∑': 'summation',
+  '∫': 'integration',
+  '√': 'square root',
+  '^': 'exponent',
+  'π': 'pi',
+  '°': 'degree',
+  '∞': 'infinity',
+  '∈': 'is an element of',
+  '∀': 'for all',
+  '∃': 'exists'
+}
+
 _capitalization_list = [
   'IOC', 'USD', 'CEO', 'DJ', 'US', 'RBI', 'UTC'
 ]
@@ -67,7 +130,9 @@ _emoji_pattern = re.compile("["
                            "]+", flags=re.UNICODE)
 #_emoticon_pattern = r'[:;][-]*[)D]|//'
 _emoticon_pattern = re.compile(u'(' + u'|'.join([k for k in emoticon_dict] + ['//']) + u')')
-
+currency_symbols = '|'.join(re.escape(symbol) for symbol in _currency_mapping.keys())
+_currency_pattern_generic = re.compile(rf'([0-9\.]*[0-9]+)\s*({currency_symbols})|({currency_symbols})\s*([0-9\.]*[0-9]+)')
+_math_symbols_pattern = re.compile('|'.join(map(re.escape, _math_symbols.keys())))
 
 def _remove_commas(m):
   return m.group(1).replace(',', '')
@@ -119,6 +184,11 @@ def _expand_rupees(m):
   else:
     return 'zero rupees' 
   
+def _expand_currency_generic(m):
+  symbol = m.group(2) or m.group(3)
+  number = m.group(1) or m.group(4)
+  return '%s %s' % (number, _currency_mapping.get(symbol, symbol))
+  
 def remove_emoji(text):
   text = re.sub(_emoji_pattern, r'', text)
   text = re.sub(_emoticon_pattern, '', text)
@@ -159,6 +229,12 @@ def _expand_number(m):
       return _inflect.number_to_words(num, andword='', zero='oh', group=2).replace(', ', ' ')
   else:
     return _inflect.number_to_words(num, andword='')
+  
+def replace_math_symbols(text):
+  # adding extra space before and after to make sure 2 words arent merged
+  # more than one space will be cleared at the end
+  text = _math_symbols_pattern.sub(lambda x: " " + _math_symbols[x.group(0)] + " ", text)
+  return text
 
 
 def normalize_numbers(text):
@@ -166,9 +242,10 @@ def normalize_numbers(text):
   text = re.sub(_pounds_re, r'\1 pounds', text)
   text = re.sub(_dollars_re, _expand_dollars, text)
   text = re.sub(_rupees_re, _expand_rupees, text)
+  text = re.sub(_currency_pattern_generic, _expand_currency_generic, text)
   text = re.sub(_units_re, _expand_units, text)
   #text = re.sub(_percent_re, r'\1 percents', text)
-  text = text.replace("%", " percent ")
+  # text = text.replace("%", " percent ")
   text = re.sub(_decimal_number_re, _expand_decimal_point, text)
   text = re.sub(_ordinal_re, _expand_ordinal, text)
   text = re.sub(_number_re, _expand_number, text)
@@ -224,6 +301,7 @@ def transliteration_cleaners(text):
 def english_cleaners(text):
   '''Pipeline for English text, including number and abbreviation expansion.'''
   text = expand_numbers(text)
+  text = replace_math_symbols(text)
   text = remove_emoji(text)
   text = convert_to_ascii(text)
   text = separate_capital_letters(text)
