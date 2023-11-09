@@ -404,11 +404,15 @@ class TextToSpeech:
         :return: Generated audio clip(s) as a torch tensor. Shape 1,S if k=1 else, (k,1,S) where S is the sample length.
                  Sample rate is 24kHz.
         """
+        start_time = time()
+        start_time_0 = start_time
         deterministic_seed = self.deterministic_state(seed=use_deterministic_seed)
 
         text_tokens = torch.IntTensor(self.tokenizer.encode(text)).unsqueeze(0).to(self.device)
         text_tokens = F.pad(text_tokens, (0, 1))  # This may not be necessary.
         assert text_tokens.shape[-1] < 400, 'Too much text provided. Break the text up into separate segments and re-try inference.'
+        tokenization_time = time() - start_time
+        start_time = time()
         auto_conds = None
         if voice_samples is not None:
             auto_conditioning, diffusion_conditioning, auto_conds, _ = self.get_conditioning_latents(voice_samples, return_mels=True)
@@ -418,8 +422,11 @@ class TextToSpeech:
             auto_conditioning, diffusion_conditioning = self.get_random_conditioning_latents()
         auto_conditioning = auto_conditioning.to(self.device)
         diffusion_conditioning = diffusion_conditioning.to(self.device)
+        voice_condt_time = time() - start_time
 
+        start_time = time()
         diffuser = load_discrete_vocoder_diffuser(desired_diffusion_steps=diffusion_iterations, cond_free=cond_free, cond_free_k=cond_free_k)
+        diffuser_helper_time = time() - start_time
 
         with torch.no_grad():
             samples = []
@@ -428,6 +435,7 @@ class TextToSpeech:
             calm_token = 83  # This is the token for coding silence, which is fixed in place with "fix_autoregressive_output"
             if verbose:
                 print("Generating autoregressive samples..")
+            start_time = time()
             if not torch.backends.mps.is_available():
                 with self.temporary_cuda(self.autoregressive
                 ) as autoregressive, torch.autocast(device_type="cuda", dtype=torch.float16, enabled=self.half):
@@ -459,7 +467,10 @@ class TextToSpeech:
                         padding_needed = max_mel_tokens - codes.shape[1]
                         codes = F.pad(codes, (0, padding_needed), value=stop_mel_token)
                         samples.append(codes)
+            torch.cuda.synchronize()
+            transformer_time = time() - start_time
 
+            start_time = time()
             clip_results = []
             
             if not torch.backends.mps.is_available():
@@ -527,7 +538,10 @@ class TextToSpeech:
             if self.cvvp is not None:
                 self.cvvp = self.cvvp.cpu()
             del samples
+            torch.cuda.synchronize()
+            clvp_time = time() - start_time
 
+            start_time = time()
             # The diffusion model actually wants the last hidden layer from the autoregressive model as conditioning
             # inputs. Re-produce those for the top results. This could be made more efficient by storing all of these
             # results, but will increase memory usage.
@@ -551,7 +565,10 @@ class TextToSpeech:
                                                     torch.tensor([best_results.shape[-1]*self.autoregressive.mel_length_compression], device=text_tokens.device),
                                                     return_latent=True, clip_inputs=False)
                     del auto_conditioning
+            torch.cuda.synchronize()
+            re_transformer_time = time() - start_time
 
+            start_time = time()
             if verbose:
                 print("Transforming autoregressive outputs into audio..")
             wav_candidates = []
@@ -598,22 +615,40 @@ class TextToSpeech:
                                                 verbose=verbose)
                     wav = vocoder.inference(mel)
                     wav_candidates.append(wav.cpu())
+            torch.cuda.synchronize()
+            vocoder_time = time() - start_time
 
+            start_time = time()
             def potentially_redact(clip, text):
                 if self.enable_redaction:
                     return self.aligner.redact(clip.squeeze(1), text).unsqueeze(1)
                 return clip
             wav_candidates = [potentially_redact(wav_candidate, text) for wav_candidate in wav_candidates]
+            redact_time = time() - start_time
+            
+            total_time = time() - start_time_0
 
             if len(wav_candidates) > 1:
                 res = wav_candidates
             else:
                 res = wav_candidates[0]
+                
+            timings = {
+                'total_time': total_time,
+                'tokenization_time': tokenization_time,
+                'voice_condition_latent_time': voice_condt_time,
+                'diffuser_helper_loading_time': diffuser_helper_time,
+                'transformer_autoregressive_time': transformer_time,
+                'clvp_time': clvp_time,
+                'transformer_latent_time': re_transformer_time,
+                'vocoder_time': vocoder_time,
+                'redact_time': redact_time
+            }
 
             if return_deterministic_state:
                 return res, (deterministic_seed, text, voice_samples, conditioning_latents)
             else:
-                return res
+                return res, timings
     def deterministic_state(self, seed=None):
         """
         Sets the random seeds that tortoise uses to the current time() and returns that seed so results can be
