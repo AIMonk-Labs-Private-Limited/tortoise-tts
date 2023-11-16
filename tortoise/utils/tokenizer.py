@@ -5,10 +5,22 @@ import json
 import inflect
 import torch
 from tokenizers import Tokenizer
-
-
+from pathlib import Path
+import sys
 # Regular expression matching whitespace:
 from unidecode import unidecode
+
+# NEMO
+# Enable this for using nemo text normalisation
+NEMO = True
+DIR_PATH = os.path.dirname(os.path.abspath(__file__))
+NEMO_SRC_DIR = os.path.join(Path(DIR_PATH).parent.parent.parent, 'NEMO')
+NEMO_CONFIG_PATH = os.path.join(NEMO_SRC_DIR, "conf/duplex_tn_config.yaml")
+print("Module path: ", NEMO_SRC_DIR)
+sys.path.append(NEMO_SRC_DIR)
+
+from inference import nemo_model, nemo_infer
+
 
 _whitespace_re = re.compile(r'\s+')
 
@@ -341,10 +353,14 @@ class VoiceBpeTokenizer:
             self.preprocess_text = basic_cleaners
         else:
             self.preprocess_text = english_cleaners
+        if NEMO:
+          self.nemo_model = nemo_model(NEMO_CONFIG_PATH)
 
     def encode(self, txt):
         # print("Before processing: ", txt.encode("utf-8"))
         txt = self.preprocess_text(txt)
+        if NEMO:
+            txt = nemo_infer(txt, self.nemo_model)    ## text normalisation
         # print("After processing: ", txt)
         txt = txt.replace(' ', '[SPACE]')
         return self.tokenizer.encode(txt).ids
