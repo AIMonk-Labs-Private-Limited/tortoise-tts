@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import string
 
 import inflect
 import torch
@@ -87,7 +88,8 @@ _math_symbols = {
   'θ': 'theta',
   '½': 'one half',
   '+': 'plus',
-  '-': 'minus',
+  # removing - as minus because in most cases it's used as - in word, not as minus
+  #'-': 'minus',
   '×': 'multiplication',
   '*': 'asterisk',
   '÷': 'division',
@@ -143,8 +145,10 @@ _emoji_pattern = re.compile("["
 #_emoticon_pattern = r'[:;][-]*[)D]|//'
 _emoticon_pattern = re.compile(u'(' + u'|'.join([k for k in emoticon_dict] + ['//']) + u')')
 currency_symbols = '|'.join(re.escape(symbol) for symbol in _currency_mapping.keys())
-_currency_pattern_generic = re.compile(rf'([0-9\.]*[0-9]+)\s*({currency_symbols})|({currency_symbols})\s*([0-9\.]*[0-9]+)')
+_currency_pattern_generic = re.compile(rf'([0-9\.]*[0-9]+)\s*\b({currency_symbols})\b|\b({currency_symbols})\b\s*([0-9\.]*[0-9]+)')
 _math_symbols_pattern = re.compile('|'.join(map(re.escape, _math_symbols.keys())))
+# translator to remove punctuations from string
+_punct_remove_trnslt = str.maketrans("", "", string.punctuation)
 
 def _remove_commas(m):
   return m.group(1).replace(',', '')
@@ -238,7 +242,7 @@ def _expand_number(m):
     elif num % 100 == 0:
       return _inflect.number_to_words(num // 100) + ' hundred'
     else:
-      return _inflect.number_to_words(num, andword='', zero='oh', group=2).replace(', ', ' ')
+      return _inflect.number_to_words(num, andword='', zero='oh', group=2).replace(', ', ' ').replace("-", " ")
   else:
     return _inflect.number_to_words(num, andword='')
   
@@ -288,7 +292,8 @@ def separate_capital_letters(text):
   spaced_words = []
   
   for word in words:
-    if word in _capitalization_list:
+    # check word after removing punctuations from it for abbreviation
+    if word.translate(_punct_remove_trnslt) in _capitalization_list:
       spaced_words.append(' '.join(list(word)))
     else:
       spaced_words.append(word)
