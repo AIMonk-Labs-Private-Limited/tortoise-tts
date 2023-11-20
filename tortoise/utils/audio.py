@@ -130,6 +130,10 @@ def load_voices(voices, extra_voice_dirs=[]):
             latents.append(latent)
     if len(latents) == 0:
         return clips, None
+    elif len(latents) == 1:
+        # returning latents as it is, because list size is 1 and no need for mean
+        # return 0th element which is an actual tuple latent
+        return None, latents[0]
     else:
         latents_0 = torch.stack([l[0] for l in latents], dim=0).mean(dim=0)
         latents_1 = torch.stack([l[1] for l in latents], dim=0).mean(dim=0)
