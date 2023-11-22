@@ -377,10 +377,16 @@ class UnifiedVoice(nn.Module):
         )
         if use_deepspeed and half and torch.cuda.is_available():
             import deepspeed
+            from deepspeed.model_implementations.transformers.ds_gpt import DeepSpeedGPTInference
             self.ds_engine = deepspeed.init_inference(model=self.inference_model,  
                                                     mp_size=1,
                                                     replace_with_kernel_inject=True,
                                                     dtype=torch.float16)
+            # set attribute dtype to float16 for each deepspeed injected layer
+            # this is needed due to a bug in deepspeed library code
+            for layer in self.ds_engine.module.modules():
+                if isinstance(layer, DeepSpeedGPTInference):
+                    setattr(layer, 'dtype', torch.float16)
             self.inference_model = self.ds_engine.module.eval()
         elif use_deepspeed and torch.cuda.is_available():
             import deepspeed
