@@ -113,7 +113,7 @@ _math_symbols = {
 }
 
 _capitalization_list = [
-  'IOC', 'USD', 'CEO', 'DJ', 'US', 'RBI', 'UTC'
+  'IOC', 'USD', 'CEO', 'DJ', 'US', 'RBI', 'UTC', 'HTTP', 'HTTPS'
 ]
 
 
@@ -149,6 +149,7 @@ _currency_pattern_generic = re.compile(rf'([0-9\.]*[0-9]+)\s*\b({currency_symbol
 _math_symbols_pattern = re.compile('|'.join(map(re.escape, _math_symbols.keys())))
 # translator to remove punctuations from string
 _punct_remove_trnslt = str.maketrans("", "", string.punctuation)
+_replace_dot_in_words = re.compile(r'(?<=\w)\.(?=\w)')
 
 def _remove_commas(m):
   return m.group(1).replace(',', '')
@@ -321,7 +322,7 @@ def english_cleaners(text):
   text = replace_math_symbols(text)
   text = remove_emoji(text)
   text = convert_to_ascii(text)
-  text = separate_capital_letters(text)
+  #text = separate_capital_letters(text)
   text = lowercase(text)
   # text = expand_numbers(text)
   text = expand_abbreviations(text)
@@ -329,6 +330,15 @@ def english_cleaners(text):
   text = text.replace('"', '')
   return text
 
+def nemo_post_processing(text):
+  text = separate_capital_letters(text)
+  # replace colons with colon word separated by single space
+  text = text.replace(":", " colon ")
+  # replace dot inside a word with "point"
+  text = re.sub(_replace_dot_in_words, " point ", text)
+  # remove extra spaces and only keep a single
+  text = collapse_whitespace(text)
+  return text
 
 def lev_distance(s1, s2):
   if len(s1) > len(s2):
@@ -358,6 +368,7 @@ class VoiceBpeTokenizer:
             self.preprocess_text = basic_cleaners
         else:
             self.preprocess_text = english_cleaners
+        self.nemo_postprocessing_text = nemo_post_processing
         if NEMO:
           self.nemo_model = nemo_model(NEMO_CONFIG_PATH)
 
@@ -366,6 +377,7 @@ class VoiceBpeTokenizer:
         txt = self.preprocess_text(txt)
         if NEMO:
             txt = nemo_infer(txt, self.nemo_model)    ## text normalisation
+        txt = self.nemo_postprocessing_text(txt)
         # print("After processing: ", txt)
         txt = txt.replace(' ', '[SPACE]')
         return self.tokenizer.encode(txt).ids
