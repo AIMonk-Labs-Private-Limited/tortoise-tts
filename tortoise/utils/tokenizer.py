@@ -2,7 +2,7 @@ import os
 import re
 import json
 import string
-
+import csv
 import inflect
 import torch
 from tokenizers import Tokenizer
@@ -22,9 +22,11 @@ sys.path.append(NEMO_SRC_DIR)
 
 from inference import nemo_model, nemo_infer
 
+# ABBREVIATIONS
+INDIAN_ABBREVIATIONS = os.path.join(Path(DIR_PATH).parent, 'data/indian_abbreviations.csv')
+INTERNATIONAL_ABBREVIATIONS = os.path.join(Path(DIR_PATH).parent, 'data/international_abbreviations.csv')
 
 _whitespace_re = re.compile(r'\s+')
-
 
 # List of (regular expression, replacement) pairs for abbreviations:
 _abbreviations = [(re.compile('\\b%s\\.' % x[0], re.IGNORECASE), x[1]) for x in [
@@ -113,9 +115,41 @@ _math_symbols = {
 }
 
 _capitalization_list = [
-  'IOC', 'USD', 'CEO', 'DJ', 'US', 'RBI', 'UTC', 'HTTP', 'HTTPS'
+  'IOC', 'USD', 'CEO', 'DJ', 'US', 'RBI', 'UTC', 'HTTP', 'HTTPS', 'AP', 'T20', 'ACA-VDCA', 'AQI', 'CDC', 'ICC'
 ]
 
+## ADDING ABBRIVATIONS FROM CSV FILE
+def read_csv(csv_file_path):
+    initialism_list = []
+    acronym_dict = {}
+
+    # Read the CSV file
+    with open(csv_file_path, mode='r', encoding='utf-8') as file:
+        reader = csv.DictReader(file)
+
+        for row in reader:
+            abbreviation = row["Abbreviation"]
+            full_form = row["Full-Form"]
+            abbreviation_type = row["Type"]
+            pronunciation = row.get("Pronunciation", "")
+
+            if abbreviation_type == "initialism":
+                initialism_list.append(abbreviation)
+            elif abbreviation_type == "acronym":
+                if pronunciation == "":
+                    acronym_dict[abbreviation] = abbreviation
+                else:
+                    acronym_dict[abbreviation] = pronunciation
+
+    return initialism_list, acronym_dict
+
+
+indian_initialisms_list, indian_acronyms_dict = read_csv(INDIAN_ABBREVIATIONS)
+international_initialisms_list, international_acronyms_dict = read_csv(INTERNATIONAL_ABBREVIATIONS)
+
+##Total initialisim list and acronym dict
+_intialisms = indian_initialisms_list + international_initialisms_list + _capitalization_list
+_acronyms = {**indian_acronyms_dict, **international_acronyms_dict}
 
 def expand_abbreviations(text):
   for regex, replacement in _abbreviations:
@@ -288,14 +322,27 @@ def convert_to_ascii(text):
 #   text = re.sub(r'\b[A-Z]+\b', lambda match: ' '.join(match.group(0)), text)
 #   return text
 
-def separate_capital_letters(text):
+def initialism(text):
   words = text.split(" ")
   spaced_words = []
   
   for word in words:
     # check word after removing punctuations from it for abbreviation
-    if word.translate(_punct_remove_trnslt) in _capitalization_list:
+    if word.translate(_punct_remove_trnslt) in _intialisms:
       spaced_words.append(' '.join(list(word)))
+    else:
+      spaced_words.append(word)
+      
+  return ' '.join(spaced_words)
+
+def acronyms(text):
+  words = text.split(" ")
+  spaced_words = []
+  
+  for word in words:
+    # check word after removing punctuations from it for abbreviation
+    if word.translate(_punct_remove_trnslt) in _acronyms:
+      spaced_words.append(_acronyms[word.translate(_punct_remove_trnslt)])
     else:
       spaced_words.append(word)
       
@@ -323,21 +370,27 @@ def english_cleaners(text):
   text = remove_emoji(text)
   text = convert_to_ascii(text)
   #text = separate_capital_letters(text)
-  text = lowercase(text)
+  # text = lowercase(text)
   # text = expand_numbers(text)
-  text = expand_abbreviations(text)
+  # text = expand_abbreviations(text)
   text = collapse_whitespace(text)
   text = text.replace('"', '')
   return text
 
 def nemo_post_processing(text):
-  text = separate_capital_letters(text)
+  # replace initialisms with spaced words
+  text = initialism(text)
+  # replace acronyms with pronunciations
+  text = acronyms(text)
+  text = expand_abbreviations(text)
   # replace colons with colon word separated by single space
   text = text.replace(":", " colon ")
   # replace dot inside a word with "point"
   text = re.sub(_replace_dot_in_words, " point ", text)
   # remove extra spaces and only keep a single
   text = collapse_whitespace(text)
+  # replace all text into lowercase
+  text = lowercase(text)
   return text
 
 def lev_distance(s1, s2):
@@ -377,8 +430,8 @@ class VoiceBpeTokenizer:
         txt = self.preprocess_text(txt)
         if NEMO:
             txt = nemo_infer(txt, self.nemo_model)    ## text normalisation
+            
         txt = self.nemo_postprocessing_text(txt)
-        # print("After processing: ", txt)
         txt = txt.replace(' ', '[SPACE]')
         return self.tokenizer.encode(txt).ids
 
