@@ -10,6 +10,7 @@ from pathlib import Path
 import sys
 # Regular expression matching whitespace:
 from unidecode import unidecode
+from collections import defaultdict
 
 # NEMO
 # Enable this for using nemo text normalisation
@@ -25,6 +26,7 @@ from inference import nemo_model, nemo_infer
 # ABBREVIATIONS
 INDIAN_ABBREVIATIONS = os.path.join(Path(DIR_PATH).parent, 'data/indian_abbreviations.csv')
 INTERNATIONAL_ABBREVIATIONS = os.path.join(Path(DIR_PATH).parent, 'data/international_abbreviations.csv')
+ENGLISH_DICTIONARY = os.path.join(Path(DIR_PATH).parent, 'data/words_alpha.txt')
 
 _whitespace_re = re.compile(r'\s+')
 
@@ -142,6 +144,21 @@ def read_csv(csv_file_path):
                     acronym_dict[abbreviation] = pronunciation
 
     return initialism_list, acronym_dict
+  
+def build_eng_dictionary(dict_txt_filepath):
+  '''
+  Builds a set of dictionary eng words that are used to check if word is in
+  dict or not
+  '''
+  with open(dict_txt_filepath, 'r') as f:
+    lines = f.readlines()
+    # already sorted in file
+    words = [line.strip() for line in lines]
+  
+  # set for faster checking of "in"
+  eng_dict = set(words)
+      
+  return eng_dict
 
 
 indian_initialisms_list, indian_acronyms_dict = read_csv(INDIAN_ABBREVIATIONS)
@@ -150,6 +167,7 @@ international_initialisms_list, international_acronyms_dict = read_csv(INTERNATI
 ##Total initialisim list and acronym dict
 _intialisms = indian_initialisms_list + international_initialisms_list + _capitalization_list
 _acronyms = {**indian_acronyms_dict, **international_acronyms_dict}
+_eng_words_dict = build_eng_dictionary(ENGLISH_DICTIONARY)
 
 def expand_abbreviations(text):
   for regex, replacement in _abbreviations:
@@ -325,7 +343,6 @@ def convert_to_ascii(text):
 def initialism(text):
   words = text.split(" ")
   spaced_words = []
-  
   for word in words:
     # check word after removing punctuations from it for abbreviation
     if word.translate(_punct_remove_trnslt) in _intialisms:
@@ -343,6 +360,25 @@ def acronyms(text):
     # check word after removing punctuations from it for abbreviation
     if word.translate(_punct_remove_trnslt) in _acronyms:
       spaced_words.append(_acronyms[word.translate(_punct_remove_trnslt)])
+    else:
+      spaced_words.append(word)
+      
+  return ' '.join(spaced_words)
+
+def check_abbreviations(text):
+  words = text.split(" ")
+  spaced_words = []
+  
+  for word in words:
+    punct_removed_word = word.translate(_punct_remove_trnslt)
+    if punct_removed_word in _acronyms:
+      spaced_words.append(_acronyms[punct_removed_word])
+    elif punct_removed_word in _intialisms:
+      spaced_words.append(' '.join(list(punct_removed_word)))
+    # if word contains only capital letter and not in english dictionary,
+    # treat it as initialism and separate each letter by space
+    elif punct_removed_word.isupper() and (not punct_removed_word.lower() in _eng_words_dict):
+      spaced_words.append(' '.join(list(punct_removed_word)))
     else:
       spaced_words.append(word)
       
@@ -379,9 +415,10 @@ def english_cleaners(text):
 
 def nemo_post_processing(text):
   # replace initialisms with spaced words
-  text = initialism(text)
+  #text = initialism(text)
   # replace acronyms with pronunciations
-  text = acronyms(text)
+  #text = acronyms(text)
+  text = check_abbreviations(text)
   text = expand_abbreviations(text)
   # replace colons with colon word separated by single space
   text = text.replace(":", " colon ")
