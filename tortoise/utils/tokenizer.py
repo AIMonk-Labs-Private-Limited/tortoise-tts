@@ -11,6 +11,7 @@ import sys
 # Regular expression matching whitespace:
 from unidecode import unidecode
 from collections import defaultdict
+from transformers import pipeline
 
 # NEMO
 # Enable this for using nemo text normalisation
@@ -27,6 +28,30 @@ from inference import nemo_model, nemo_infer
 INDIAN_ABBREVIATIONS = os.path.join(Path(DIR_PATH).parent, 'data/indian_abbreviations.csv')
 INTERNATIONAL_ABBREVIATIONS = os.path.join(Path(DIR_PATH).parent, 'data/international_abbreviations.csv')
 ENGLISH_DICTIONARY = os.path.join(Path(DIR_PATH).parent, 'data/words_alpha.txt')
+
+# RoBERTa model for getting abbreviations in text
+ROBERTA = True
+
+def get_abbreviation(pipe,text):
+    
+    output = pipe(text)
+    if len(output) == 0:
+        return []
+    
+    concatenated_output = [] 
+    for i in range(len(output)):
+        entry = output[i]
+        if i > 0 and entry['start'] == output[i - 1]['end']:
+            # Concatenate the words if the conditions are met
+            concatenated_output[-1]['word'] += entry['word']
+            concatenated_output[-1]['end'] = entry['end']
+        else:
+            # If conditions are not met, add the current entry to the output
+            concatenated_output.append(entry)
+            
+    abbrasive_words = [entry['word'].lstrip('Ġ') for entry in concatenated_output if entry['entity'] == 'B-AC' and entry.get('score', 0) > 0.8]
+    
+    return list(set(abbrasive_words))
 
 _whitespace_re = re.compile(r'\s+')
 
@@ -365,15 +390,21 @@ def acronyms(text):
       
   return ' '.join(spaced_words)
 
-def check_abbreviations(text):
+def check_abbreviations(text,abbrasive_words):
   words = text.split(" ")
   spaced_words = []
   
+  # Filter out words from abbrasive_words that are present in _acronyms or _intialisms or _eng_words_dict
+  filtered_abbrasive_words = [word for word in abbrasive_words if word not in _acronyms and word not in _intialisms and word not in _eng_words_dict]
+  
   for word in words:
     punct_removed_word = word.translate(_punct_remove_trnslt)
+    
     if punct_removed_word in _acronyms:
       spaced_words.append(_acronyms[punct_removed_word])
     elif punct_removed_word in _intialisms:
+      spaced_words.append(' '.join(list(punct_removed_word)))
+    elif punct_removed_word in filtered_abbrasive_words:
       spaced_words.append(' '.join(list(punct_removed_word)))
     # if word contains only capital letter and not in english dictionary,
     # treat it as initialism and separate each letter by space
@@ -413,12 +444,12 @@ def english_cleaners(text):
   text = text.replace('"', '')
   return text
 
-def nemo_post_processing(text):
+def nemo_post_processing(text,abbrasive_words):
   # replace initialisms with spaced words
   #text = initialism(text)
   # replace acronyms with pronunciations
   #text = acronyms(text)
-  text = check_abbreviations(text)
+  text = check_abbreviations(text,abbrasive_words)
   text = expand_abbreviations(text)
   # replace colons with colon word separated by single space
   text = text.replace(":", " colon ")
@@ -461,14 +492,20 @@ class VoiceBpeTokenizer:
         self.nemo_postprocessing_text = nemo_post_processing
         if NEMO:
           self.nemo_model = nemo_model(NEMO_CONFIG_PATH)
+        if ROBERTA:
+          self.roberta_model = pipeline("token-classification", model="surrey-nlp/roberta-large-finetuned-abbr")
+          
 
     def encode(self, txt):
         # print("Before processing: ", txt.encode("utf-8"))
         txt = self.preprocess_text(txt)
         if NEMO:
             txt = nemo_infer(txt, self.nemo_model)    ## text normalisation
-            
-        txt = self.nemo_postprocessing_text(txt)
+        if ROBERTA:
+          abbrasive_words = get_abbreviation(self.roberta_model,txt)   ## RoBERTa model for getting abbreviations in text
+        else:
+          abbrasive_words = []
+        txt = self.nemo_postprocessing_text(txt,abbrasive_words)
         txt = txt.replace(' ', '[SPACE]')
         return self.tokenizer.encode(txt).ids
 
