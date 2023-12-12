@@ -6,6 +6,7 @@ import csv
 import inflect
 import torch
 from tokenizers import Tokenizer
+from urllib.parse import urlparse
 from pathlib import Path
 import sys
 # Regular expression matching whitespace:
@@ -138,7 +139,13 @@ _math_symbols = {
   '∞': 'infinity',
   '∈': 'is an element of',
   '∀': 'for all',
-  '∃': 'exists'
+  '∃': 'exists',
+  '(': ' ', # ')' removed by emoji re, removing '(' here
+}
+
+_pronoun_list = {
+  "xiaomi": "shau mee",
+  "nvidia": "en vi dee aa"
 }
 
 _capitalization_list = [
@@ -227,6 +234,12 @@ _math_symbols_pattern = re.compile('|'.join(map(re.escape, _math_symbols.keys())
 # translator to remove punctuations from string
 _punct_remove_trnslt = str.maketrans("", "", string.punctuation)
 _replace_dot_in_words = re.compile(r'(?<=\w)\.(?=\w)')
+_pronoun_re = re.compile(r'\b(?:' + '|'.join(re.escape(word) for word in _pronoun_list.keys()) + r')\b', re.IGNORECASE)
+
+def is_url(string):
+    return string.startswith('http') or string.startswith('https') or \
+      string.startswith('ftp') or string.startswith('fpts') or \
+      string.startswith('localhost')
 
 def _remove_commas(m):
   return m.group(1).replace(',', '')
@@ -330,6 +343,8 @@ def replace_math_symbols(text):
   text = _math_symbols_pattern.sub(lambda x: " " + _math_symbols[x.group(0)] + " ", text)
   return text
 
+def replace_pronoun(match):
+  return _pronoun_list.get(match.group(0).lower(), match.group(0))
 
 def normalize_numbers(text):
   text = re.sub(_comma_number_re, _remove_commas, text)
@@ -365,30 +380,99 @@ def convert_to_ascii(text):
 #   text = re.sub(r'\b[A-Z]+\b', lambda match: ' '.join(match.group(0)), text)
 #   return text
 
-def initialism(text):
-  words = text.split(" ")
-  spaced_words = []
-  for word in words:
-    # check word after removing punctuations from it for abbreviation
-    if word.translate(_punct_remove_trnslt) in _intialisms:
-      spaced_words.append(' '.join(list(word)))
-    else:
-      spaced_words.append(word)
+# def initialism(text):
+#   words = text.split(" ")
+#   spaced_words = []
+#   for word in words:
+#     # check word after removing punctuations from it for abbreviation
+#     if word.translate(_punct_remove_trnslt) in _intialisms:
+#       spaced_words.append(' '.join(list(word)))
+#     else:
+#       spaced_words.append(word)
       
-  return ' '.join(spaced_words)
+#   return ' '.join(spaced_words)
 
-def acronyms(text):
-  words = text.split(" ")
-  spaced_words = []
+# def acronyms(text):
+#   words = text.split(" ")
+#   spaced_words = []
   
-  for word in words:
-    # check word after removing punctuations from it for abbreviation
-    if word.translate(_punct_remove_trnslt) in _acronyms:
-      spaced_words.append(_acronyms[word.translate(_punct_remove_trnslt)])
-    else:
-      spaced_words.append(word)
+#   for word in words:
+#     # check word after removing punctuations from it for abbreviation
+#     if word.translate(_punct_remove_trnslt) in _acronyms:
+#       spaced_words.append(_acronyms[word.translate(_punct_remove_trnslt)])
+#     else:
+#       spaced_words.append(word)
       
-  return ' '.join(spaced_words)
+#   return ' '.join(spaced_words)
+
+def contains_alpha_and_numbers(input_str):
+    return bool(re.search(r'[a-zA-Z]', input_str)) and bool(re.search(r'\d', input_str))
+  
+def parse_urls(text):
+  pass
+
+def separate_alphanum_word(text):
+  '''
+  Separate continous segments of alphabets and numbers with space within a word
+  CY23 -> CY 23
+  K50 -> K 50
+  '''
+  words = text.split(" ")
+  
+  spaced_words = []
+  for word in words:
+    if contains_alpha_and_numbers(word):
+      split_words = []
+      last_word = word[0]
+      last_char_isdigit = word[0].isdigit()
+      for char in word[1:]:
+        if char.isdigit() == last_char_isdigit:
+          last_word += char
+        else:
+          last_char_isdigit = char.isdigit()
+          split_words.append(last_word)
+          last_word = char
+      split_words.append(last_word)
+      word = " ".join(split_words)
+    
+    spaced_words.append(word)
+    
+  return " ".join(spaced_words)
+
+def parse_url_for_tts(text):
+    parsed_segments = []
+    for segment in text.split(" "):
+      if is_url(segment):
+        # print(segment, urlparse(segment))
+        parsed_url = urlparse(segment)
+        netloc = " dot ".join(parsed_url.netloc.split("."))
+        path = " slash ".join(parsed_url.path.split("/"))
+        queries = parsed_url.query.split("&")
+        query_pronounce = []
+        for query in queries:
+          if query:
+              key, value = query.split("=")
+              if not key in _eng_words_dict:
+                key = " ".join(list(key))
+              if not value in _eng_words_dict:
+                value = " ".join(list(value))
+              query_pronounce.append(f"{key} equal {value}")
+        queries = " ampersand ".join(query_pronounce)
+        url_scheme = parsed_url.scheme
+        url_pronounce = [url_scheme, netloc, path, queries]
+        url_pronounce = ' slash '.join(url_pronounce)
+        segment = url_pronounce
+            
+      parsed_segments.append(segment)
+    
+    text = ' '.join(parsed_segments)       
+    return text     
+
+def get_initialism(word, append_end_char=''):
+  if append_end_char:
+    return ' '.join(list(word)) + append_end_char
+  else:
+    return ' '.join(list(word))
 
 def check_abbreviations(text,abbrasive_words):
   words = text.split(" ")
@@ -398,20 +482,32 @@ def check_abbreviations(text,abbrasive_words):
   filtered_abbrasive_words = [word for word in abbrasive_words if word not in _acronyms and word not in _intialisms and word not in _eng_words_dict]
   
   for word in words:
+    # remove apostrophe's if exists at end
+    append_end_char = ''
+    if word.endswith("'s"):
+      word = word[:-2]
+      append_end_char = "'s"
+    # if abbreivation has 's' at the end to indiciate plural form
+    # remove it
+    # eg: "While 386 and 398 AQIs were recorded in the Delhi University areas."
+    elif word.isalpha() and word[-1] == 's' and word[:-1].isupper():
+      word = word[:-1]
+      append_end_char = "s"
+      
     punct_removed_word = word.translate(_punct_remove_trnslt)
-    
+
     if punct_removed_word in _acronyms:
       spaced_words.append(_acronyms[punct_removed_word])
     elif punct_removed_word in _intialisms:
-      spaced_words.append(' '.join(list(punct_removed_word)))
+      spaced_words.append(get_initialism(punct_removed_word, append_end_char))
     elif punct_removed_word in filtered_abbrasive_words:
-      spaced_words.append(' '.join(list(punct_removed_word)))
+      spaced_words.append(get_initialism(punct_removed_word, append_end_char))
     # if word contains only capital letter and not in english dictionary,
     # treat it as initialism and separate each letter by space
     elif punct_removed_word.isupper() and (not punct_removed_word.lower() in _eng_words_dict):
-      spaced_words.append(' '.join(list(punct_removed_word)))
+      spaced_words.append(get_initialism(punct_removed_word, append_end_char))
     else:
-      spaced_words.append(word)
+      spaced_words.append(word + append_end_char)
       
   return ' '.join(spaced_words)
 
@@ -432,10 +528,15 @@ def transliteration_cleaners(text):
 
 def english_cleaners(text):
   '''Pipeline for English text, including number and abbreviation expansion.'''
+  text = parse_url_for_tts(text)
+  text = separate_alphanum_word(text)
   text = expand_numbers(text)
+  text = text.replace("...", ". ")
   text = replace_math_symbols(text)
   text = remove_emoji(text)
   text = convert_to_ascii(text)
+  # replace pronoun with custom pronunciation
+  text = _pronoun_re.sub(replace_pronoun, text)
   #text = separate_capital_letters(text)
   # text = lowercase(text)
   # text = expand_numbers(text)
